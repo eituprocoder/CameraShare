@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>Camera Share - PeerJS</title>
+
+  <!-- PeerJS -->
+  <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #101114;
+      color: white;
+      font-family: Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .app {
+      width: 95%;
+      max-width: 1000px;
+      text-align: center;
+    }
+
+    h1 {
+      margin-bottom: 8px;
+    }
+
+    .status {
+      margin: 15px 0;
+      padding: 12px;
+      background: #202228;
+      border-radius: 12px;
+    }
+
+    .code-box {
+      margin: 20px 0;
+    }
+
+    input {
+      width: 90px;
+      padding: 15px;
+      font-size: 28px;
+      text-align: center;
+      border: none;
+      border-radius: 10px;
+      outline: none;
+    }
+
+    button {
+      padding: 13px 18px;
+      margin: 5px;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      opacity: 0.85;
+    }
+
+    .primary {
+      background: #3d7cff;
+      color: white;
+    }
+
+    .danger {
+      background: #e84141;
+      color: white;
+    }
+
+    .videos {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .video-box {
+      position: relative;
+      background: black;
+      border-radius: 15px;
+      overflow: hidden;
+      min-height: 250px;
+    }
+
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background: black;
+    }
+
+    .label {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      padding: 5px 10px;
+      background: rgba(0,0,0,.6);
+      border-radius: 8px;
+    }
+
+    .controls {
+      margin-top: 20px;
+    }
+
+    @media (max-width: 700px) {
+      .videos {
+        grid-template-columns: 1fr;
+      }
+
+      .video-box {
+        min-height: 220px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+<div class="app">
+
+  <h1>📹 Camera Share</h1>
+
+  <div id="status" class="status">
+    Activando cámara...
+  </div>
+
+  <div class="code-box">
+
+    <input
+      id="roomCode"
+      type="number"
+      min="0"
+      max="9"
+      maxlength="1"
+      placeholder="#"
+    >
+
+    <br><br>
+
+    <button class="primary" onclick="createRoom()">
+      Crear sala
+    </button>
+
+    <button class="primary" onclick="joinRoom()">
+      Unirse
+    </button>
+
+  </div>
+
+  <div class="videos">
+
+    <div class="video-box">
+      <video
+        id="localVideo"
+        autoplay
+        muted
+        playsinline>
+      </video>
+
+      <div class="label">
+        Tú
+      </div>
+    </div>
+
+    <div class="video-box">
+      <video
+        id="remoteVideo"
+        autoplay
+        playsinline>
+      </video>
+
+      <div class="label">
+        Otra persona
+      </div>
+    </div>
+
+  </div>
+
+  <div class="controls">
+
+    <button onclick="toggleCamera()">
+      📷 Cámara
+    </button>
+
+    <button onclick="toggleMic()">
+      🎤 Micrófono
+    </button>
+
+    <button class="danger" onclick="hangUp()">
+      📞 Colgar
+    </button>
+
+  </div>
+
+</div>
+
+<script>
+
+let peer = null;
+let localStream = null;
+let currentCall = null;
+
+let cameraEnabled = true;
+let micEnabled = true;
+
+const statusElement =
+  document.getElementById("status");
+
+const localVideo =
+  document.getElementById("localVideo");
+
+const remoteVideo =
+  document.getElementById("remoteVideo");
+
+
+// ===============================
+// ACTIVAR CÁMARA
+// ===============================
+
+async function startCamera() {
+
+  try {
+
+    localStream =
+      await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: "user"
+        },
+        audio: true
+      });
+
+    localVideo.srcObject = localStream;
+
+    statusElement.innerText =
+      "Cámara lista. Elige un código del 0 al 9.";
+
+  }
+
+  catch (error) {
+
+    console.error(error);
+
+    statusElement.innerText =
+      "No se pudo acceder a la cámara o al micrófono.";
+
+  }
+
+}
+
+
+// ===============================
+// OBTENER CÓDIGO
+// ===============================
+
+function getCode() {
+
+  const value =
+    document.getElementById("roomCode").value.trim();
+
+  if (!/^[0-9]$/.test(value)) {
+
+    alert("Introduce un código de un solo dígito: 0-9.");
+
+    return null;
+
+  }
+
+  return value;
+
+}
+
+
+// ===============================
+// CREAR SALA
+// ===============================
+
+function createRoom() {
+
+  const code = getCode();
+
+  if (code === null)
+    return;
+
+  if (!localStream) {
+
+    alert("La cámara todavía no está disponible.");
+
+    return;
+
+  }
+
+  if (peer) {
+
+    peer.destroy();
+
+  }
+
+  /*
+    Prefijo para no utilizar IDs PeerJS
+    demasiado genéricos.
+
+    Para el usuario la sala sigue siendo
+    simplemente 0,1,2...9.
+  */
+
+  const peerID =
+    "camera-share-room-" + code;
+
+  statusElement.innerText =
+    "Creando sala " + code + "...";
+
+  peer = new Peer(peerID);
+
+
+  peer.on("open", function() {
+
+    statusElement.innerText =
+      "Sala " + code +
+      " creada. Esperando a otra persona...";
+
+  });
+
+
+  // Alguien intenta llamarnos
+
+  peer.on("call", function(call) {
+
+    if (currentCall) {
+
+      /*
+        Ya hay una persona conectada.
+        Rechazamos llamadas adicionales.
+      */
+
+      call.close();
+
+      return;
+
+    }
+
+    currentCall = call;
+
+    statusElement.innerText =
+      "Persona encontrada. Conectando...";
+
+    call.answer(localStream);
+
+    setupCall(call);
+
+  });
+
+
+  peer.on("error", function(error) {
+
+    console.error(error);
+
+    if (error.type === "unavailable-id") {
+
+      statusElement.innerText =
+        "La sala " + code +
+        " ya existe. Pulsa UNIRSE.";
+
+    }
+
+    else {
+
+      statusElement.innerText =
+        "Error: " + error.type;
+
+    }
+
+  });
+
+}
+
+
+// ===============================
+// UNIRSE
+// ===============================
+
+function joinRoom() {
+
+  const code = getCode();
+
+  if (code === null)
+    return;
+
+  if (!localStream) {
+
+    alert("La cámara todavía no está disponible.");
+
+    return;
+
+  }
+
+  if (peer) {
+
+    peer.destroy();
+
+  }
+
+  statusElement.innerText =
+    "Buscando sala " + code + "...";
+
+
+  // ID aleatorio para el invitado
+
+  peer = new Peer();
+
+
+  peer.on("open", function() {
+
+    const hostID =
+      "camera-share-room-" + code;
+
+    statusElement.innerText =
+      "Conectando con sala " + code + "...";
+
+
+    const call =
+      peer.call(
+        hostID,
+        localStream
+      );
+
+
+    if (!call) {
+
+      statusElement.innerText =
+        "No se pudo iniciar la conexión.";
+
+      return;
+
+    }
+
+
+    currentCall = call;
+
+    setupCall(call);
+
+  });
+
+
+  peer.on("error", function(error) {
+
+    console.error(error);
+
+    statusElement.innerText =
+      "No se pudo conectar: " + error.type;
+
+  });
+
+}
+
+
+// ===============================
+// CONFIGURAR LLAMADA
+// ===============================
+
+function setupCall(call) {
+
+  call.on(
+    "stream",
+    function(remoteStream) {
+
+      remoteVideo.srcObject =
+        remoteStream;
+
+      remoteVideo.play()
+        .catch(() => {});
+
+      statusElement.innerText =
+        "🟢 Conectados";
+
+    }
+  );
+
+
+  call.on(
+    "close",
+    function() {
+
+      remoteVideo.srcObject = null;
+
+      currentCall = null;
+
+      statusElement.innerText =
+        "La otra persona se desconectó.";
+
+    }
+  );
+
+
+  call.on(
+    "error",
+    function(error) {
+
+      console.error(error);
+
+      statusElement.innerText =
+        "Error durante la llamada.";
+
+    }
+  );
+
+}
+
+
+// ===============================
+// ENCENDER / APAGAR CÁMARA
+// ===============================
+
+function toggleCamera() {
+
+  if (!localStream)
+    return;
+
+  const videoTracks =
+    localStream.getVideoTracks();
+
+  if (videoTracks.length === 0)
+    return;
+
+  cameraEnabled =
+    !cameraEnabled;
+
+  videoTracks[0].enabled =
+    cameraEnabled;
+
+  statusElement.innerText =
+    cameraEnabled
+      ? "📷 Cámara encendida"
+      : "📷 Cámara apagada";
+
+}
+
+
+// ===============================
+// ENCENDER / APAGAR MICRÓFONO
+// ===============================
+
+function toggleMic() {
+
+  if (!localStream)
+    return;
+
+  const audioTracks =
+    localStream.getAudioTracks();
+
+  if (audioTracks.length === 0)
+    return;
+
+  micEnabled =
+    !micEnabled;
+
+  audioTracks[0].enabled =
+    micEnabled;
+
+  statusElement.innerText =
+    micEnabled
+      ? "🎤 Micrófono encendido"
+      : "🔇 Micrófono apagado";
+
+}
+
+
+// ===============================
+// COLGAR
+// ===============================
+
+function hangUp() {
+
+  if (currentCall) {
+
+    currentCall.close();
+
+    currentCall = null;
+
+  }
+
+  remoteVideo.srcObject = null;
+
+  statusElement.innerText =
+    "Llamada finalizada.";
+
+}
+
+
+// ===============================
+// EVITAR MÁS DE 1 DÍGITO
+// ===============================
+
+document
+  .getElementById("roomCode")
+  .addEventListener(
+    "input",
+    function() {
+
+      this.value =
+        this.value
+          .replace(/[^0-9]/g, "")
+          .slice(0,1);
+
+    }
+  );
+
+
+// ===============================
+// INICIAR
+// ===============================
+
+startCamera();
+
+</script>
+
+</body>
+  </html>
